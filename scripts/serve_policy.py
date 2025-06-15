@@ -18,6 +18,7 @@ class EnvMode(enum.Enum):
     ALOHA_SIM = "aloha_sim"
     DROID = "droid"
     LIBERO = "libero"
+    FRANKA_ISAACLAB = "franka_isaaclab"
 
 
 @dataclasses.dataclass
@@ -40,7 +41,7 @@ class Args:
     """Arguments for the serve_policy script."""
 
     # Environment to serve the policy for. This is only used when serving default policies.
-    env: EnvMode = EnvMode.ALOHA_SIM
+    env: EnvMode = EnvMode.FRANKA_ISAACLAB
 
     # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a default
     # prompt.
@@ -49,7 +50,7 @@ class Args:
     # Port to serve the policy on.
     port: int = 8000
     # Record the policy's behavior for debugging.
-    record: bool = False
+    record: bool = True
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -73,12 +74,19 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
         config="pi0_fast_libero",
         dir="s3://openpi-assets/checkpoints/pi0_fast_libero",
     ),
+    # Use OpenPi Fast pi-0 Franka policy for the Franka Isaac Lab environment.
+    # Alternatively use Pi0 Policy: s3://openpi-assets/checkpoints/pi0_base
+    EnvMode.FRANKA_ISAACLAB: Checkpoint(
+        config="pi0_franka_isaaclab",
+        dir="s3://openpi-assets/checkpoints/pi0_fast_base",
+    ),
 }
 
 
 def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
+        print("Training config name: ", checkpoint.config)
         return _policy_config.create_trained_policy(
             _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
         )
@@ -89,10 +97,13 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            print("Training config name: ", args.policy.config)
+
             return _policy_config.create_trained_policy(
                 _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
             )
         case Default():
+            print("Using default policy for environment:", args.env.value)
             return create_default_policy(args.env, default_prompt=args.default_prompt)
 
 
@@ -118,5 +129,6 @@ def main(args: Args) -> None:
 
 
 if __name__ == "__main__":
+    print("----------- 🚀 Starting OpenPI Policy Server -----------\n")
     logging.basicConfig(level=logging.INFO, force=True)
     main(tyro.cli(Args))

@@ -321,6 +321,77 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class FrankaIsaacLabDataConfig(DataConfigFactory):
+    """
+    DataConfig for Franka Isaac Lab environment (Isaac-Reach-Franka-v0).
+
+    Handles the specific requirements of Franka robot in Isaac Lab:
+    - 7-DOF joint control with optional gripper
+    - 14D proprioceptive state (joint positions + velocities)
+    - Base camera (128x128) and optional wrist camera
+    - Delta action handling for joint control
+    """
+
+    # If true, will convert joint actions to deltas relative to current state
+    use_delta_joint_actions: bool = True
+    # Default prompt for reaching tasks
+    default_prompt: str | None = "reach to the target position"
+
+    # Repack transforms to map Isaac Lab keys to model format
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "image", 
+                        "observation/wrist_image": "wrist_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+    )
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Import franka policy here to avoid circular imports
+        from openpi.policies import franka_isaaclab_policy
+
+        # Data transforms for Franka Isaac Lab
+        data_transforms = _transforms.Group(
+            inputs=[
+                franka_isaaclab_policy.FrankaIsaacLabInputs(
+                    action_dim=model_config.action_dim,
+                    model_type=model_config.model_type
+                )
+            ],
+            outputs=[franka_isaaclab_policy.FrankaIsaacLabOutputs()],
+        )
+        
+        # Apply delta action transform if requested
+        if self.use_delta_joint_actions:
+            # Apply delta to first 7 actions (joints), keep gripper absolute
+            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+        
+        # Model transforms with Franka-specific settings
+        model_transforms = ModelTransformFactory(
+            default_prompt=self.default_prompt
+        )(model_config)
+        
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
@@ -466,6 +537,34 @@ _CONFIGS = [
                 prompt_from_task=True,
             ),
         ),
+    ),
+    # TODO(Sapan): Update this config for Franka Isaac Lab
+    # These train configs define the hyperparameters for fine-tuning the base model on your own dataset.
+    # They are used to define key elements like the dataset you are training on, the base checkpoint you
+    # are using, and other hyperparameters like how many training steps to run or what learning rate to use.
+    # For your own dataset, you can copy this class and modify the dataset name, and data transforms based on
+    # the comments below.
+    TrainConfig(
+        name="pi0_franka_isaaclab",
+        model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=10),
+        data=FrankaIsaacLabDataConfig(
+            # TODO(Sapan): For a custom robot, I am not sure how to generate the norm stats. 
+            # See https://github.com/Physical-Intelligence/openpi/issues/367
+            repo_id="isaac_lab/franka_reach",  # Placeholder repo ID
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
+        ),
+        # Here you define which pre-trained checkpoint you want to load to initialize the model.
+        # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        # See server_policy.py `EnvMode.FRANKA_ISAACLAB`
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+        # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
     ),
     #
     # Fine-tuning Libero configs.
