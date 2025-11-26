@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.so101_policy as so101_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -355,6 +356,64 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotSO101DataConfig(DataConfigFactory):
+    """Config for training on SO101 (LeRobot Koch v1.1) robot arm data.
+    
+    The SO101 arm has 6 DOF (5 joints + 1 gripper) and 2 cameras (side and wrist).
+    This config is designed for the sapanostic/pen-placement-task dataset.
+    """
+    
+    # If provided, will be injected into the input data if the "prompt" key is not present.
+    default_prompt: str | None = None
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform to map dataset keys to expected inference keys.
+        # LeRobot dataset uses dot notation (observation.state), we use slash notation (observation/state)
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/images/side": "observation.images.side",
+                        "observation/images/wrist": "observation.images.wrist",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                        "prompt": "task",  # LeRobot uses "task" for instruction
+                    }
+                )
+            ]
+        )
+        
+        # Data transforms: SO101-specific transformations for inference and training
+        data_transforms = _transforms.Group(
+            inputs=[so101_policy.SO101Inputs(model_type=model_config.model_type)],
+            outputs=[so101_policy.SO101Outputs()],
+        )
+        
+        # SO101 dataset uses absolute joint positions, so we need to convert to delta actions
+        # for training (Pi0 models are trained on delta actions)
+        # Apply delta conversion to first 5 joints, leave gripper (index 5) as absolute
+        SO101_NUM_JOINTS = 5 # Exclude gripper (index 5) from delta conversion
+        delta_action_mask = _transforms.make_bool_mask(SO101_NUM_JOINTS, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+        
+        # Model transforms: prompt tokenization, image resizing, etc.
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+        
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("action",),  # Dataset uses "action" key
+            prompt_from_task=True,  # Use task field from dataset for prompts
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -630,6 +689,55 @@ _CONFIGS = [
                 prompt_from_task=True,
             ),
         ),
+    ),
+    #
+    # Inference SO101 configs.
+    #
+    TrainConfig(
+        name="pi05_so101",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        data=SimpleDataConfig(
+            assets=AssetsConfig(asset_id="so101"),
+            data_transforms=lambda model_config: _transforms.Group(
+                inputs=[so101_policy.SO101Inputs(model_type=ModelType.PI05)],
+                outputs=[so101_policy.SO101Outputs()],
+            ),
+            model_transforms=ModelTransformFactory(default_prompt="place the pen"),
+        ),
+    ),
+    #
+    # Fine-tuning SO101 configs.
+    #
+    TrainConfig(
+        name="pi05_so101_finetune",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
+        data=LeRobotSO101DataConfig(
+            repo_id="sapanostic/pen-placement-task",
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
+            assets=AssetsConfig(
+                # Load normalization stats from base checkpoint (will be computed separately)
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="so101",
+            ),
+            default_prompt="place the pen",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=5000,
+        batch_size=32,
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
     ),
     #
     # Fine-tuning Libero configs.

@@ -7,7 +7,7 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -143,10 +143,22 @@ def create_torch_dataset(
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
+        video_backend="pyav",  # Use pyav instead of torchcodec (which requires FFmpeg)
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        # In lerobot 0.4.1+, tasks is a DataFrame with task descriptions
+        # Convert it to dict[int, str] format expected by PromptFromLeRobotTask
+        if hasattr(dataset_meta.tasks, "to_dict"):
+            # It's a DataFrame - flip the dict so task_index is the key
+            # LeRobot 0.4.1+ returns tasks as DataFrame: {task_index: task_name}
+            # PromptFromLeRobotTask expects: {task_name: task_index}
+            temp_dict = dataset_meta.tasks[dataset_meta.tasks.columns[0]].to_dict()
+            tasks_dict = {task_name: task_idx for task_idx, task_name in temp_dict.items()}
+        else:
+            # Already a dict (for backwards compatibility)
+            tasks_dict = dataset_meta.tasks
+        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(tasks_dict)])
 
     return dataset
 
