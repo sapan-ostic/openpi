@@ -111,4 +111,9 @@ class SO101Outputs(transforms.DataTransformFn):
     def __call__(self, data: dict) -> dict:
         # Only return the first 6 dims for SO101
         actions = np.asarray(data["actions"])
+        if actions.shape[-1] < 6:
+            raise ValueError(
+                f"SO101 requires at least 6 action dimensions (5 joints + 1 gripper), "
+                f"but model produced {actions.shape[-1]} dimensions"
+            )
         return {"actions": actions[:, :6]}

@@ -64,7 +64,11 @@ def create_trained_policy(
         try:
             norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
         except FileNotFoundError:
-            logging.info(f"Norm stats not found for asset_id={data_config.asset_id}, proceeding without normalization.")
+            logging.warning(
+                f"Norm stats not found for asset_id={data_config.asset_id}. "
+                f"Policy will run WITHOUT normalization, which may produce poor results. "
+                f"Compute stats using: scripts/compute_norm_stats.py --config-name=pi05_so101_finetune"
+            )
             norm_stats = None
 
     # Determine the device to use for PyTorch models

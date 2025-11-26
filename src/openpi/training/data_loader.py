@@ -151,8 +151,10 @@ def create_torch_dataset(
         # Convert it to dict[int, str] format expected by PromptFromLeRobotTask
         if hasattr(dataset_meta.tasks, "to_dict"):
             # It's a DataFrame - flip the dict so task_index is the key
+            # LeRobot 0.4.1+ returns tasks as DataFrame: {task_index: task_name}
+            # PromptFromLeRobotTask expects: {task_name: task_index}
             temp_dict = dataset_meta.tasks[dataset_meta.tasks.columns[0]].to_dict()
-            tasks_dict = {v: k for k, v in temp_dict.items()}
+            tasks_dict = {task_name: task_idx for task_idx, task_name in temp_dict.items()}
         else:
             # Already a dict (for backwards compatibility)
             tasks_dict = dataset_meta.tasks

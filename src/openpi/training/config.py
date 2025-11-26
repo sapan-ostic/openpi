@@ -393,7 +393,8 @@ class LeRobotSO101DataConfig(DataConfigFactory):
         # SO101 dataset uses absolute joint positions, so we need to convert to delta actions
         # for training (Pi0 models are trained on delta actions)
         # Apply delta conversion to first 5 joints, leave gripper (index 5) as absolute
-        delta_action_mask = _transforms.make_bool_mask(5, -1)
+        SO101_NUM_JOINTS = 5 # Exclude gripper (index 5) from delta conversion
+        delta_action_mask = _transforms.make_bool_mask(SO101_NUM_JOINTS, -1)
         data_transforms = data_transforms.push(
             inputs=[_transforms.DeltaActions(delta_action_mask)],
             outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -694,7 +695,7 @@ _CONFIGS = [
     #
     TrainConfig(
         name="pi05_so101",
-        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=SimpleDataConfig(
             assets=AssetsConfig(asset_id="so101"),
             data_transforms=lambda model_config: _transforms.Group(
