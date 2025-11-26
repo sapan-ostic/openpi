@@ -709,9 +709,15 @@ _CONFIGS = [
     #
     TrainConfig(
         name="pi05_so101_finetune",
-        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True),
         data=LeRobotSO101DataConfig(
             repo_id="sapanostic/pen-placement-task",
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
             assets=AssetsConfig(
                 # Load normalization stats from base checkpoint (will be computed separately)
                 assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
@@ -720,7 +726,7 @@ _CONFIGS = [
             default_prompt="place the pen",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
+        num_train_steps=5000,
         batch_size=32,
         # The freeze filter defines which parameters should be frozen during training.
         # We have a convenience function in the model config that returns the default freeze filter
